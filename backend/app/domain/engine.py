@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from app.domain.config import JunctionConfig
@@ -8,6 +8,12 @@ from app.domain.effects import (
     PublishUpdate,
     RecordAudit,
     SendControllerCommand,
+)
+from app.domain.emergency import (
+    clear_emergency,
+    evaluate_emergencies,
+    has_active_emergency,
+    register_emergency,
 )
 from app.domain.events import expire_ghost_vehicles, process_sensor_event
 from app.domain.inputs import (
@@ -23,12 +29,14 @@ from app.domain.model import (
     CommandStatus,
     DeviceStatus,
     Direction,
+    EmergencyStatus,
     JunctionState,
     Mode,
     PendingCommand,
     Signal,
     StageKind,
     StageStatus,
+    VehicleType,
 )
 from app.domain.safety import SafetyViolation, check_invariants
 from app.domain.scheduler import select_best_candidate_phase, should_switch_phase
@@ -74,14 +82,14 @@ class TrafficEngine:
             elif isinstance(domain_input, ControllerAck):
                 outcome = self._handle_controller_ack(state, config, domain_input, now, effects)
             elif isinstance(domain_input, SensorEvent):
-                outcome, event_effects = process_sensor_event(state, config, domain_input, now)
-                effects.extend(event_effects)
+                outcome = self._handle_sensor_event(state, config, domain_input, now, effects)
+            elif isinstance(domain_input, AdminCommand):
+                outcome = self._handle_admin_command(state, config, domain_input, now, effects, details)
             elif isinstance(domain_input, Tick):
                 outcome = self._handle_tick(state, config, domain_input, now, effects)
             elif isinstance(domain_input, DeviceStatusUpdate):
                 outcome = self._handle_device_status(state, config, domain_input, now, effects)
             else:
-                # Other inputs (AdminCommand) handled in Phase 3
                 outcome = "UNHANDLED_INPUT"
 
             # Check invariants
@@ -161,6 +169,180 @@ class TrafficEngine:
         )
         effects.extend(stage_effects)
         return "RECOVERED"
+
+    def _handle_sensor_event(
+        self,
+        state: JunctionState,
+        config: JunctionConfig,
+        event: SensorEvent,
+        now: datetime,
+        effects: list[DomainEffect],
+    ) -> str:
+        outcome, event_effects = process_sensor_event(state, config, event, now)
+        effects.extend(event_effects)
+
+        # Handle Emergency vehicle arrival / clearance
+        if event.vehicle_type == VehicleType.EMERGENCY:
+            if event.event_type == "VEHICLE_ARRIVED" and outcome == "ACCEPTED":
+                em_rec, em_effects = register_emergency(state, config, event.vehicle_id, event.direction, now)
+                effects.extend(em_effects)
+
+                if state.mode != Mode.DEGRADED:
+                    if state.mode == Mode.MANUAL:
+                        state.suspended_mode = Mode.MANUAL
+                        effects.append(
+                            RecordAudit(
+                                junction_id=state.junction_id,
+                                server_ts=now,
+                                event_type="MANUAL_MODE_SUSPENDED",
+                                mode=Mode.EMERGENCY.value,
+                                message="Manual control suspended due to incoming emergency vehicle",
+                            )
+                        )
+                    state.mode = Mode.EMERGENCY
+
+                    target_p = config.phase_for_direction(event.direction)
+                    if target_p:
+                        state.target_phase = target_p
+                        # Emergency starts sequence immediately (never skips YELLOW/ALL_RED)
+                        if state.stage == StageKind.GREEN and state.active_phase != target_p:
+                            yellow_effects = enter_yellow(
+                                state, config, state.active_phase, now, reason="Emergency preemption initiated"
+                            )
+                            effects.extend(yellow_effects)
+
+            elif event.event_type == "VEHICLE_CLEARED":
+                cl_effects = clear_emergency(state, config, event.vehicle_id, now)
+                effects.extend(cl_effects)
+
+                # Check if any eligible emergencies remain
+                next_em, eval_effects = evaluate_emergencies(state, config, now)
+                effects.extend(eval_effects)
+
+                if not next_em and state.mode == Mode.EMERGENCY:
+                    # Resume manual if lease still valid, else return to AUTOMATIC
+                    if (
+                        state.suspended_mode == Mode.MANUAL
+                        and state.manual_expires_at
+                        and now < state.manual_expires_at
+                    ):
+                        state.mode = Mode.MANUAL
+                        state.suspended_mode = None
+                        effects.append(
+                            RecordAudit(
+                                junction_id=state.junction_id,
+                                server_ts=now,
+                                event_type="MANUAL_MODE_RESUMED",
+                                mode=Mode.MANUAL.value,
+                                message="Resumed manual mode after emergency ended",
+                            )
+                        )
+                    else:
+                        state.mode = Mode.AUTOMATIC
+                        state.suspended_mode = None
+                        effects.append(
+                            RecordAudit(
+                                junction_id=state.junction_id,
+                                server_ts=now,
+                                event_type="EMERGENCY_COMPLETED",
+                                mode=Mode.AUTOMATIC.value,
+                                message="All emergencies cleared; returned to AUTOMATIC",
+                            )
+                        )
+
+        return outcome
+
+    def _handle_admin_command(
+        self,
+        state: JunctionState,
+        config: JunctionConfig,
+        cmd: AdminCommand,
+        now: datetime,
+        effects: list[DomainEffect],
+        details: dict[str, Any],
+    ) -> str:
+        if cmd.command_type == "MANUAL_GREEN_REQUEST":
+            if not cmd.direction:
+                return "INVALID_COMMAND_DIRECTION_MISSING"
+
+            if state.mode == Mode.DEGRADED:
+                return "JUNCTION_DEGRADED"
+
+            if state.mode == Mode.EMERGENCY or has_active_emergency(state):
+                return "EMERGENCY_ACTIVE"
+
+            # Check multi-admin lock: first requester holds the lease
+            if (
+                state.mode == Mode.MANUAL
+                and state.manual_owner
+                and state.manual_owner != cmd.requested_by
+                and state.manual_expires_at
+                and now < state.manual_expires_at
+            ):
+                return "MANUAL_LOCKED"
+
+            # Grant / refresh lease
+            lease_expiry = now + timedelta(seconds=config.timing.manual_lease_s)
+            state.manual_owner = cmd.requested_by
+            state.manual_direction = cmd.direction
+            state.manual_expires_at = lease_expiry
+            state.mode = Mode.MANUAL
+
+            target_p = config.phase_for_direction(cmd.direction)
+            if not target_p:
+                return "UNKNOWN_PHASE"
+
+            state.target_phase = target_p
+
+            effects.append(
+                RecordAudit(
+                    junction_id=state.junction_id,
+                    server_ts=now,
+                    event_type="MANUAL_GREEN_REQUESTED",
+                    direction=cmd.direction,
+                    mode=Mode.MANUAL.value,
+                    message=f"Manual green granted to phase {target_p} by '{cmd.requested_by}' (lease: {config.timing.manual_lease_s}s)",
+                    details={"lease_expires_at": lease_expiry.isoformat(), "owner": cmd.requested_by},
+                )
+            )
+
+            if state.stage == StageKind.GREEN and state.active_phase == target_p:
+                details["planned_sequence"] = []
+                return "COMMAND_NOOP"
+
+            # Transition to target phase
+            if state.stage == StageKind.GREEN and state.active_phase:
+                yellow_effects = enter_yellow(
+                    state, config, state.active_phase, now, reason="Manual green requested for another phase"
+                )
+                effects.extend(yellow_effects)
+
+            details["planned_sequence"] = [
+                f"YELLOW({state.active_phase})" if state.active_phase else "YELLOW",
+                "ALL_RED",
+                f"GREEN({target_p})",
+            ]
+            return "COMMAND_ACCEPTED"
+
+        elif cmd.command_type == "RETURN_TO_AUTOMATIC":
+            state.manual_owner = None
+            state.manual_direction = None
+            state.manual_expires_at = None
+            state.suspended_mode = None
+            state.mode = Mode.AUTOMATIC
+
+            effects.append(
+                RecordAudit(
+                    junction_id=state.junction_id,
+                    server_ts=now,
+                    event_type="MANUAL_MODE_RELEASED",
+                    mode=Mode.AUTOMATIC.value,
+                    message=f"Manual control released by '{cmd.requested_by}'; returned to AUTOMATIC",
+                )
+            )
+            return "COMMAND_ACCEPTED"
+
+        return "UNKNOWN_COMMAND_TYPE"
 
     def _handle_controller_ack(
         self,
@@ -276,11 +458,45 @@ class TrafficEngine:
         now: datetime,
         effects: list[DomainEffect],
     ) -> str:
-        # Expire ghost vehicles
+        # 1. Expire ghost vehicles
         ghost_effects = expire_ghost_vehicles(state, config, now)
         effects.extend(ghost_effects)
 
-        # 1. Check ACK timeouts for any pending commands
+        # 2. Evaluate emergencies (stale timeout & max hold)
+        curr_em, em_effects = evaluate_emergencies(state, config, now)
+        effects.extend(em_effects)
+
+        if state.mode == Mode.EMERGENCY and not curr_em:
+            # Return from EMERGENCY
+            if (
+                state.suspended_mode == Mode.MANUAL
+                and state.manual_expires_at
+                and now < state.manual_expires_at
+            ):
+                state.mode = Mode.MANUAL
+                state.suspended_mode = None
+            else:
+                state.mode = Mode.AUTOMATIC
+                state.suspended_mode = None
+
+        # 3. Check manual lease expiry
+        if state.mode == Mode.MANUAL and state.manual_expires_at:
+            if now >= state.manual_expires_at:
+                state.mode = Mode.AUTOMATIC
+                state.manual_owner = None
+                state.manual_direction = None
+                state.manual_expires_at = None
+                effects.append(
+                    RecordAudit(
+                        junction_id=state.junction_id,
+                        server_ts=now,
+                        event_type="MANUAL_LEASE_EXPIRED",
+                        mode=Mode.AUTOMATIC.value,
+                        message="Manual lease expired; returned to AUTOMATIC",
+                    )
+                )
+
+        # 4. Check ACK timeouts for any pending commands
         timed_out_cmds = []
         for cmd_id, cmd in list(state.pending_commands.items()):
             if cmd.status == CommandStatus.PENDING:
@@ -333,7 +549,7 @@ class TrafficEngine:
                 )
                 return "COMMAND_TIMEOUT_DEGRADED"
 
-        # 2. Advance stage if in TIMING status
+        # 5. Advance stage if in TIMING status
         if state.stage_status == StageStatus.TIMING and state.stage_timer_started_at:
             elapsed = (now - state.stage_timer_started_at).total_seconds()
 
@@ -374,18 +590,45 @@ class TrafficEngine:
                     return "ENTERED_ALL_RED"
 
             elif state.stage == StageKind.GREEN and state.active_phase:
-                if state.mode == Mode.AUTOMATIC:
+                if state.mode == Mode.EMERGENCY:
+                    if curr_em:
+                        em_phase = config.phase_for_direction(curr_em.direction)
+                        if em_phase != state.active_phase:
+                            # Switch to emergency phase
+                            state.target_phase = em_phase
+                            yellow_effects = enter_yellow(
+                                state, config, state.active_phase, now, reason="Switch to priority emergency phase"
+                            )
+                            effects.extend(yellow_effects)
+                            return "ENTERED_YELLOW"
+                        else:
+                            # Mark serving
+                            if curr_em.status != EmergencyStatus.SERVING:
+                                curr_em.status = EmergencyStatus.SERVING
+                                curr_em.serving_since = now
+                    else:
+                        # No more emergency -> leave green
+                        yellow_effects = enter_yellow(
+                            state, config, state.active_phase, now, reason="Emergency cleared; returning from green"
+                        )
+                        effects.extend(yellow_effects)
+                        return "ENTERED_YELLOW"
+
+                elif state.mode == Mode.MANUAL:
+                    if state.target_phase and state.target_phase != state.active_phase:
+                        yellow_effects = enter_yellow(
+                            state, config, state.active_phase, now, reason="Manual switch to requested phase"
+                        )
+                        effects.extend(yellow_effects)
+                        return "ENTERED_YELLOW"
+
+                elif state.mode == Mode.AUTOMATIC:
                     should_switch, target_p, reason = should_switch_phase(
                         state, config, state.active_phase, now, elapsed
                     )
                     if should_switch:
                         state.target_phase = target_p
                         yellow_effects = enter_yellow(state, config, state.active_phase, now, reason=reason)
-                        effects.extend(yellow_effects)
-                        return "ENTERED_YELLOW"
-                else:
-                    if self._should_leave_green_fallback(state, config, now, elapsed):
-                        yellow_effects = enter_yellow(state, config, state.active_phase, now)
                         effects.extend(yellow_effects)
                         return "ENTERED_YELLOW"
 
@@ -397,12 +640,34 @@ class TrafficEngine:
         config: JunctionConfig,
         now: datetime,
     ) -> Optional[str]:
-        """Resolves target phase. Prioritizes explicit target, then scheduler ranking."""
+        """Resolves target phase by priority: Emergency -> Manual -> Target -> Scheduler."""
+        # 1. Emergency priority (FIFO)
+        eligible_em = [
+            e for e in state.emergencies
+            if e.status in (EmergencyStatus.ACTIVE, EmergencyStatus.SERVING)
+        ]
+        if eligible_em:
+            eligible_em.sort(key=lambda e: e.id)
+            em = eligible_em[0]
+            em_phase = config.phase_for_direction(em.direction)
+            if em_phase:
+                state.target_phase = None
+                return em_phase
+
+        # 2. Manual priority
+        if state.mode == Mode.MANUAL and state.manual_direction:
+            m_phase = config.phase_for_direction(state.manual_direction)
+            if m_phase:
+                state.target_phase = None
+                return m_phase
+
+        # 3. Explicit target phase
         if state.target_phase and state.target_phase in config.phases:
             chosen = state.target_phase
             state.target_phase = None
             return chosen
 
+        # 4. Scheduler best candidate
         best = select_best_candidate_phase(state, config, None, now)
         if best:
             return best
@@ -416,19 +681,6 @@ class TrafficEngine:
 
         curr_idx = phases.index(state.active_phase) if state.active_phase in phases else 0
         return phases[(curr_idx + 1) % len(phases)]
-
-    def _should_leave_green_fallback(
-        self,
-        state: JunctionState,
-        config: JunctionConfig,
-        now: datetime,
-        elapsed_s: float,
-    ) -> bool:
-        if elapsed_s < config.timing.green_min_s:
-            return False
-        if elapsed_s >= config.timing.green_max_s:
-            return True
-        return False
 
     def _handle_device_status(
         self,
