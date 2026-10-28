@@ -9,6 +9,7 @@ from app.domain.effects import (
     RecordAudit,
     SendControllerCommand,
 )
+from app.domain.events import expire_ghost_vehicles, process_sensor_event
 from app.domain.inputs import (
     AdminCommand,
     ControllerAck,
@@ -30,6 +31,7 @@ from app.domain.model import (
     StageStatus,
 )
 from app.domain.safety import SafetyViolation, check_invariants
+from app.domain.scheduler import select_best_candidate_phase, should_switch_phase
 from app.domain.stages import (
     create_stage_commands,
     enter_all_red,
@@ -71,12 +73,15 @@ class TrafficEngine:
                 outcome = self._handle_recover(state, config, domain_input, now, effects)
             elif isinstance(domain_input, ControllerAck):
                 outcome = self._handle_controller_ack(state, config, domain_input, now, effects)
+            elif isinstance(domain_input, SensorEvent):
+                outcome, event_effects = process_sensor_event(state, config, domain_input, now)
+                effects.extend(event_effects)
             elif isinstance(domain_input, Tick):
                 outcome = self._handle_tick(state, config, domain_input, now, effects)
             elif isinstance(domain_input, DeviceStatusUpdate):
                 outcome = self._handle_device_status(state, config, domain_input, now, effects)
             else:
-                # Other inputs (SensorEvent, AdminCommand) handled in Phase 2 & 3
+                # Other inputs (AdminCommand) handled in Phase 3
                 outcome = "UNHANDLED_INPUT"
 
             # Check invariants
@@ -271,6 +276,10 @@ class TrafficEngine:
         now: datetime,
         effects: list[DomainEffect],
     ) -> str:
+        # Expire ghost vehicles
+        ghost_effects = expire_ghost_vehicles(state, config, now)
+        effects.extend(ghost_effects)
+
         # 1. Check ACK timeouts for any pending commands
         timed_out_cmds = []
         for cmd_id, cmd in list(state.pending_commands.items()):
@@ -331,7 +340,7 @@ class TrafficEngine:
             if state.stage == StageKind.ALL_RED:
                 if elapsed >= config.timing.all_red_s:
                     # Select next phase
-                    next_phase = self._resolve_next_phase(state, config)
+                    next_phase = self._resolve_next_phase(state, config, now)
                     if next_phase:
                         # Safety check: all conflicting actual signals must be RED!
                         conflicting_dirs = []
@@ -365,37 +374,56 @@ class TrafficEngine:
                     return "ENTERED_ALL_RED"
 
             elif state.stage == StageKind.GREEN and state.active_phase:
-                if self._should_leave_green(state, config, now, elapsed):
-                    yellow_effects = enter_yellow(state, config, state.active_phase, now)
-                    effects.extend(yellow_effects)
-                    return "ENTERED_YELLOW"
+                if state.mode == Mode.AUTOMATIC:
+                    should_switch, target_p, reason = should_switch_phase(
+                        state, config, state.active_phase, now, elapsed
+                    )
+                    if should_switch:
+                        state.target_phase = target_p
+                        yellow_effects = enter_yellow(state, config, state.active_phase, now, reason=reason)
+                        effects.extend(yellow_effects)
+                        return "ENTERED_YELLOW"
+                else:
+                    if self._should_leave_green_fallback(state, config, now, elapsed):
+                        yellow_effects = enter_yellow(state, config, state.active_phase, now)
+                        effects.extend(yellow_effects)
+                        return "ENTERED_YELLOW"
 
         return "TICK_PROCESSED"
 
-    def _resolve_next_phase(self, state: JunctionState, config: JunctionConfig) -> Optional[str]:
-        """Resolves target phase. Overridden or extended by scheduler/emergency/manual policies."""
+    def _resolve_next_phase(
+        self,
+        state: JunctionState,
+        config: JunctionConfig,
+        now: datetime,
+    ) -> Optional[str]:
+        """Resolves target phase. Prioritizes explicit target, then scheduler ranking."""
         if state.target_phase and state.target_phase in config.phases:
-            return state.target_phase
+            chosen = state.target_phase
+            state.target_phase = None
+            return chosen
+
+        best = select_best_candidate_phase(state, config, None, now)
+        if best:
+            return best
 
         phases = list(config.phases.keys())
         if not phases:
             return None
 
-        # By default in Phase 1, alternate between phases
         if not state.active_phase:
             return phases[0]
 
         curr_idx = phases.index(state.active_phase) if state.active_phase in phases else 0
         return phases[(curr_idx + 1) % len(phases)]
 
-    def _should_leave_green(
+    def _should_leave_green_fallback(
         self,
         state: JunctionState,
         config: JunctionConfig,
         now: datetime,
         elapsed_s: float,
     ) -> bool:
-        """Determines whether to leave GREEN stage. Re-evaluated by scheduler in Phase 2."""
         if elapsed_s < config.timing.green_min_s:
             return False
         if elapsed_s >= config.timing.green_max_s:
