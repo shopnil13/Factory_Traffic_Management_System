@@ -54,3 +54,4 @@ stateDiagram-v2
 | `YELLOW(p) (AWAITING_ACK)` | `ControllerAck` | `YELLOW(p) (TIMING)` | All pending commands ACKed | Starts `yellow_s` timer |
 | `YELLOW(p) (TIMING)` | `Tick` | `ALL_RED (AWAITING_ACK)` | `elapsed >= yellow_s` | Emits commands for phase directions to RED |
 | (Any) | Retries Exhausted | `DEGRADED (ALL_RED)` | `attempts >= ack_max_retries` | All desired set to RED; actuals marked UNKNOWN |
+

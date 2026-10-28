@@ -96,3 +96,4 @@ curl http://localhost:8000/api/junctions/junction-a/status
 ```bash
 curl -N http://localhost:8000/api/stream
 ```
+

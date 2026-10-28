@@ -225,3 +225,4 @@ export const SimulationPanel: React.FC<Props> = ({ status, onActionComplete, onE
     </div>
   );
 };
+

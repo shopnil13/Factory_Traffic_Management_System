@@ -108,3 +108,4 @@ export async function updateSimulatorConfig(config: {
   });
   return res.json();
 }
+

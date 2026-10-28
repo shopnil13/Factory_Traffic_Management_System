@@ -70,3 +70,4 @@ export interface SimulatorConfig {
   auto_ack: boolean;
   sent_commands_count?: number;
 }
+

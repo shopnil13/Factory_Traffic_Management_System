@@ -22,3 +22,4 @@ export const ConnectionBanner: React.FC<Props> = ({ connected, lastUpdated, onRe
     </div>
   );
 };
+

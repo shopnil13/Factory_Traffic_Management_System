@@ -75,3 +75,4 @@ export const AlertsPanel: React.FC<Props> = ({ status }) => {
     </div>
   );
 };
+

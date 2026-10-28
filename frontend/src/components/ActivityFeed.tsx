@@ -41,3 +41,4 @@ export const ActivityFeed: React.FC<Props> = ({ logs, onRefresh }) => {
     </div>
   );
 };
+

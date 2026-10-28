@@ -158,3 +158,4 @@ export const IntersectionView: React.FC<Props> = ({ status }) => {
     </div>
   );
 };
+

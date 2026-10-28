@@ -90,3 +90,4 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS ix_audit_junction_id_id ON audit_log(junction_id, id DESC);
+
