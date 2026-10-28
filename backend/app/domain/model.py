@@ -143,4 +143,23 @@ class JunctionState:
 
     phase_last_green_at: dict[str, datetime] = field(default_factory=dict)
     last_processed_seq: dict[Direction, int] = field(default_factory=dict)
+
+    vehicles: dict[str, VehicleRecord] = field(default_factory=dict)
+    emergencies: list[EmergencyRecord] = field(default_factory=list)
+    processed_event_ids: set[str] = field(default_factory=set)
+
     updated_at: Optional[datetime] = None
+
+    def get_queue_counts(self) -> dict[Direction, int]:
+        """Calculates derived waiting vehicle queue count per direction."""
+        counts = {d: 0 for d in Direction}
+        for v in self.vehicles.values():
+            if v.status == VehicleStatus.WAITING:
+                counts[v.direction] += 1
+        return counts
+
+    def get_waiting_vehicles(self, direction: Optional[Direction] = None) -> list[VehicleRecord]:
+        """Returns list of waiting vehicles, optionally filtered by direction."""
+        if direction is not None:
+            return [v for v in self.vehicles.values() if v.status == VehicleStatus.WAITING and v.direction == direction]
+        return [v for v in self.vehicles.values() if v.status == VehicleStatus.WAITING]

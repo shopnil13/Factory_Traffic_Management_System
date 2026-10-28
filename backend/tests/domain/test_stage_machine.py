@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 from app.domain.config import JunctionConfig, TimingConfig
 from app.domain.engine import TrafficEngine
-from app.domain.inputs import ControllerAck, Recover, Tick
+from app.domain.inputs import ControllerAck, Recover, SensorEvent, Tick
 from app.domain.model import (
     CommandStatus,
     Direction,
@@ -11,6 +11,7 @@ from app.domain.model import (
     Signal,
     StageKind,
     StageStatus,
+    VehicleType,
 )
 from app.domain.safety import SafetyViolation, check_invariants
 
@@ -170,6 +171,24 @@ def test_full_stage_cycle():
     engine.handle(state, config, Tick(now=t), t)
     assert state.stage == StageKind.GREEN
 
+    # Add demand on EAST so it switches when green_max_s is hit
+    engine.handle(
+        state,
+        config,
+        SensorEvent(
+            event_id="e-east",
+            junction_id="J1",
+            event_type="VEHICLE_ARRIVED",
+            direction=Direction.EAST,
+            vehicle_id="TRUCK-E",
+            vehicle_type=VehicleType.TRUCK,
+            sequence_no=1,
+            sensor_timestamp=t,
+            received_at=t,
+        ),
+        t,
+    )
+
     # 4. Tick at green_max_s -> enters YELLOW
     t = t + timedelta(seconds=6)  # Total 16s > green_max_s
     engine.handle(state, config, Tick(now=t), t)
@@ -227,4 +246,3 @@ def test_ack_timeout_retry_and_degraded():
     assert state.mode == Mode.DEGRADED
     for d in Direction:
         assert state.desired_signals[d] == Signal.RED
-
