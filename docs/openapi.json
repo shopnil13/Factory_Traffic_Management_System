@@ -1,0 +1,813 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Factory Traffic Management System",
+    "description": "Safety-critical multi-modal industrial intersection traffic controller",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/junctions": {
+      "get": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "List Junctions",
+        "operationId": "list_junctions_api_junctions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "Create Junction",
+        "operationId": "create_junction_api_junctions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JunctionCreateSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/junctions/{junction_id}": {
+      "get": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "Get Junction",
+        "operationId": "get_junction_api_junctions__junction_id__get",
+        "parameters": [
+          {
+            "name": "junction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Junction Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/junctions/{junction_id}/status": {
+      "get": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "Get Junction Status",
+        "operationId": "get_junction_status_api_junctions__junction_id__status_get",
+        "parameters": [
+          {
+            "name": "junction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Junction Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/junctions/{junction_id}/history": {
+      "get": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "Get Junction History",
+        "operationId": "get_junction_history_api_junctions__junction_id__history_get",
+        "parameters": [
+          {
+            "name": "junction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Junction Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Id"
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/junctions/{junction_id}/commands": {
+      "post": {
+        "tags": [
+          "Junctions"
+        ],
+        "summary": "Post Command",
+        "operationId": "post_command_api_junctions__junction_id__commands_post",
+        "parameters": [
+          {
+            "name": "junction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Junction Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCommandSchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sensor-events": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Post Sensor Event",
+        "operationId": "post_sensor_event_api_sensor_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensorEventSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/controller-events": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Post Controller Event",
+        "operationId": "post_controller_event_api_controller_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ControllerAckSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device-status": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Post Device Status",
+        "operationId": "post_device_status_api_device_status_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceStatusSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simulator/controller": {
+      "get": {
+        "tags": [
+          "Simulator"
+        ],
+        "summary": "Get Simulator Status",
+        "operationId": "get_simulator_status_api_simulator_controller_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Simulator"
+        ],
+        "summary": "Configure Simulator",
+        "operationId": "configure_simulator_api_simulator_controller_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorConfigSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stream": {
+      "get": {
+        "tags": [
+          "Stream"
+        ],
+        "summary": "Sse Stream",
+        "description": "Server-Sent Events endpoint pushing real-time state and audit events.",
+        "operationId": "sse_stream_api_stream_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminCommandSchema": {
+        "properties": {
+          "command_type": {
+            "type": "string",
+            "title": "Command Type"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By",
+            "default": "admin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command_type"
+        ],
+        "title": "AdminCommandSchema"
+      },
+      "ControllerAckSchema": {
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "title": "Command Id"
+          },
+          "junction_id": {
+            "type": "string",
+            "title": "Junction Id"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "reported_state": {
+            "$ref": "#/components/schemas/Signal"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "default": "SUCCESS"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command_id",
+          "junction_id",
+          "direction",
+          "reported_state"
+        ],
+        "title": "ControllerAckSchema"
+      },
+      "DeviceStatus": {
+        "type": "string",
+        "enum": [
+          "ONLINE",
+          "OFFLINE",
+          "DEGRADED",
+          "WARNING",
+          "UNKNOWN"
+        ],
+        "title": "DeviceStatus"
+      },
+      "DeviceStatusSchema": {
+        "properties": {
+          "junction_id": {
+            "type": "string",
+            "title": "Junction Id"
+          },
+          "component_type": {
+            "type": "string",
+            "title": "Component Type"
+          },
+          "identifier": {
+            "type": "string",
+            "title": "Identifier"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeviceStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "junction_id",
+          "component_type",
+          "identifier",
+          "status"
+        ],
+        "title": "DeviceStatusSchema"
+      },
+      "Direction": {
+        "type": "string",
+        "enum": [
+          "NORTH",
+          "SOUTH",
+          "EAST",
+          "WEST"
+        ],
+        "title": "Direction"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "JunctionCreateSchema": {
+        "properties": {
+          "junction_id": {
+            "type": "string",
+            "title": "Junction Id",
+            "description": "Unique alphanumeric identifier for the junction"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Human-readable name"
+          },
+          "timing": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing",
+            "description": "Optional custom timing parameters"
+          },
+          "phases": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "$ref": "#/components/schemas/Direction"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phases",
+            "description": "Optional phase definitions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "junction_id",
+          "name"
+        ],
+        "title": "JunctionCreateSchema"
+      },
+      "SensorEventSchema": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "junction_id": {
+            "type": "string",
+            "title": "Junction Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "vehicle_id": {
+            "type": "string",
+            "title": "Vehicle Id"
+          },
+          "vehicle_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VehicleType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sequence_no": {
+            "type": "integer",
+            "title": "Sequence No"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "junction_id",
+          "event_type",
+          "direction",
+          "vehicle_id",
+          "sequence_no",
+          "timestamp"
+        ],
+        "title": "SensorEventSchema"
+      },
+      "Signal": {
+        "type": "string",
+        "enum": [
+          "RED",
+          "YELLOW",
+          "GREEN",
+          "UNKNOWN"
+        ],
+        "title": "Signal"
+      },
+      "SimulatorConfigSchema": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "delay_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delay Ms",
+            "default": 50
+          },
+          "auto_ack": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Ack",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "SimulatorConfigSchema"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VehicleType": {
+        "type": "string",
+        "enum": [
+          "EMERGENCY",
+          "TRUCK",
+          "FORKLIFT",
+          "EMPLOYEE_VEHICLE"
+        ],
+        "title": "VehicleType"
+      }
+    }
+  }
+}
