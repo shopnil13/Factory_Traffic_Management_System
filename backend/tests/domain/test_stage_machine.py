@@ -246,3 +246,101 @@ def test_ack_timeout_retry_and_degraded():
     assert state.mode == Mode.DEGRADED
     for d in Direction:
         assert state.desired_signals[d] == Signal.RED
+
+
+def test_controller_ack_conflicting_actual_green_immediate_degraded():
+    engine = TrafficEngine()
+    config = JunctionConfig(junction_id="J1", name="Junction 1")
+    t0 = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+    state = JunctionState(
+        junction_id="J1",
+        stage=StageKind.GREEN,
+        active_phase="NORTH_SOUTH",
+        desired_signals={Direction.NORTH: Signal.GREEN, Direction.SOUTH: Signal.GREEN, Direction.EAST: Signal.RED, Direction.WEST: Signal.RED},
+        actual_signals={Direction.NORTH: Signal.GREEN, Direction.SOUTH: Signal.GREEN, Direction.EAST: Signal.RED, Direction.WEST: Signal.RED},
+    )
+
+    # Controller sends orphan/corrupt ACK claiming EAST is GREEN
+    ack = ControllerAck(
+        command_id="cmd_corrupted_123",
+        junction_id="J1",
+        direction=Direction.EAST,
+        reported_state=Signal.GREEN,
+        status="SUCCESS",
+        received_at=t0,
+    )
+    res = engine.handle(state, config, ack, t0)
+    assert res.outcome == "ACTUAL_CONFLICT_DEGRADED"
+    assert state.mode == Mode.DEGRADED
+    for d in Direction:
+        assert state.desired_signals[d] == Signal.RED
+    assert any(e.event_type == "SAFETY_VIOLATION_OBSERVED" for e in res.effects if hasattr(e, "event_type"))
+
+
+def test_controller_nack_retry_and_exhaustion():
+    engine = TrafficEngine()
+    timing = TimingConfig(ack_max_retries=2, ack_timeout_s=3)
+    config = JunctionConfig(junction_id="J1", name="Junction 1", timing=timing)
+    t = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+    state = JunctionState(junction_id="J1")
+    engine.handle(state, config, Recover(junction_id="J1", now=t), t)
+
+    cmd_id = list(state.pending_commands.keys())[0]
+    cmd = state.pending_commands[cmd_id]
+    assert cmd.attempts == 1
+
+    # Attempt 1 -> NACK arrives -> should retry with attempts=2
+    t = t + timedelta(seconds=1)
+    nack = ControllerAck(
+        command_id=cmd_id,
+        junction_id="J1",
+        direction=cmd.direction,
+        reported_state=Signal.UNKNOWN,
+        status="FAILED",
+        received_at=t,
+    )
+    res = engine.handle(state, config, nack, t)
+    assert res.outcome == "NACK_RETRY"
+    assert state.pending_commands[cmd_id].attempts == 2
+
+    # Attempt 2 -> NACK arrives -> retries exhausted -> DEGRADED
+    t = t + timedelta(seconds=1)
+    nack2 = ControllerAck(
+        command_id=cmd_id,
+        junction_id="J1",
+        direction=cmd.direction,
+        reported_state=Signal.UNKNOWN,
+        status="FAILED",
+        received_at=t,
+    )
+    res2 = engine.handle(state, config, nack2, t)
+    assert res2.outcome == "NACK_DEGRADED"
+    assert state.mode == Mode.DEGRADED
+    for d in Direction:
+        assert state.desired_signals[d] == Signal.RED
+
+
+def test_engine_atomic_rollback_on_unhandled_error():
+    engine = TrafficEngine()
+    config = JunctionConfig(junction_id="J1", name="Junction 1")
+    t = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+    state = JunctionState(junction_id="J1", mode=Mode.AUTOMATIC, version=5)
+
+    # Monkey-patch an internal handler to throw an unexpected RuntimeError
+    orig_handle_tick = engine._handle_tick
+    try:
+        def bad_handle_tick(s, c, tick, now, effects):
+            s.mode = Mode.MANUAL  # partial mutation
+            s.version = 999
+            raise RuntimeError("Unexpected simulated crash")
+
+        engine._handle_tick = bad_handle_tick
+
+        with pytest.raises(RuntimeError, match="Unexpected simulated crash"):
+            engine.handle(state, config, Tick(now=t), t)
+
+        # State must be completely restored!
+        assert state.mode == Mode.AUTOMATIC
+        assert state.version == 5
+    finally:
+        engine._handle_tick = orig_handle_tick

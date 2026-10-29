@@ -80,6 +80,7 @@ def enter_all_red(
     force_all_directions: bool = False,
 ) -> list[DomainEffect]:
     """Transitions the junction into ALL_RED stage."""
+    prev_phase = state.active_phase
     state.stage = StageKind.ALL_RED
     state.stage_status = StageStatus.AWAITING_ACK
     state.active_phase = None
@@ -89,11 +90,13 @@ def enter_all_red(
     if force_all_directions:
         dirs_to_red = list(Direction)
     else:
-        dirs_to_red = [
-            d for d in Direction
-            if state.desired_signals.get(d) != Signal.RED
-            or state.actual_signals.get(d) != Signal.RED
-        ]
+        dirs_set = set()
+        if prev_phase:
+            dirs_set.update(config.directions_for_phase(prev_phase))
+        for d in Direction:
+            if state.desired_signals.get(d) != Signal.RED or state.actual_signals.get(d) != Signal.RED:
+                dirs_set.add(d)
+        dirs_to_red = list(dirs_set)
 
     # Set desired signals
     for d in Direction:

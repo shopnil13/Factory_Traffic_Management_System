@@ -141,3 +141,93 @@ async def test_restart_recovery_on_same_db(temp_db):
     assert rt2.state.stage_status == StageStatus.AWAITING_ACK
 
     await rt2.stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_spec_scenario_asyncio_gather(temp_db):
+    repo, _ = temp_db
+    config = JunctionConfig(junction_id="J1", name="Junction 1", timing=TimingConfig.demo_profile())
+    await repo.save_junction(config)
+
+    controller = DummyController()
+    publisher = DummyPublisher()
+    runtime = JunctionRuntime(config, repo, controller, publisher)
+    await runtime.start()
+
+    t = datetime.now(timezone.utc)
+    # Spec 15.9: truck arrival, emergency arrival, duplicate emergency, manual request via asyncio.gather
+    ev_truck = SensorEvent(
+        event_id="concurrent-ev-1",
+        junction_id="J1",
+        event_type="VEHICLE_ARRIVED",
+        direction=Direction.NORTH,
+        vehicle_id="TRUCK-CONCURRENT",
+        vehicle_type=VehicleType.TRUCK,
+        sequence_no=1,
+        sensor_timestamp=t,
+        received_at=t,
+    )
+    ev_emergency = SensorEvent(
+        event_id="concurrent-ev-2",
+        junction_id="J1",
+        event_type="VEHICLE_ARRIVED",
+        direction=Direction.EAST,
+        vehicle_id="AMBULANCE-01",
+        vehicle_type=VehicleType.EMERGENCY,
+        sequence_no=2,
+        sensor_timestamp=t,
+        received_at=t,
+    )
+    ev_emergency_dup = SensorEvent(
+        event_id="concurrent-ev-2",  # exact duplicate
+        junction_id="J1",
+        event_type="VEHICLE_ARRIVED",
+        direction=Direction.EAST,
+        vehicle_id="AMBULANCE-01",
+        vehicle_type=VehicleType.EMERGENCY,
+        sequence_no=2,
+        sensor_timestamp=t,
+        received_at=t,
+    )
+    from app.domain.inputs import AdminCommand
+    from app.domain.model import Mode
+    cmd_manual = AdminCommand(
+        command_type="MANUAL_GREEN_REQUEST",
+        junction_id="J1",
+        direction=Direction.WEST,
+        requested_by="admin_alice",
+        received_at=t,
+    )
+
+    results = await asyncio.gather(
+        runtime.submit(ev_truck),
+        runtime.submit(ev_emergency),
+        runtime.submit(ev_emergency_dup),
+        runtime.submit(cmd_manual),
+    )
+
+    # Assert invariants hold
+    from app.domain.safety import check_invariants
+    check_invariants(runtime.state, config)
+
+    # Exactly one duplicate outcome
+    outcomes = [r.outcome for r in results]
+    assert "DUPLICATE" in outcomes
+
+    # Exactly one emergency record in memory
+    assert len(runtime.state.emergencies) == 1
+    assert runtime.state.emergencies[0].vehicle_id == "AMBULANCE-01"
+
+    # Emergency overrides manual: junction is in EMERGENCY mode
+    assert runtime.state.mode == Mode.EMERGENCY
+
+    # In DB: exactly one emergency row exists
+    from app.infrastructure.db.tables import EmergencyModel
+    from sqlalchemy import select
+    async with repo.session_maker() as session:
+        res = await session.execute(select(EmergencyModel).where(EmergencyModel.junction_id == "J1"))
+        em_rows = res.scalars().all()
+        assert len(em_rows) == 1
+        assert em_rows[0].vehicle_id == "AMBULANCE-01"
+
+    await runtime.stop()

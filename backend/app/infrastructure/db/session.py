@@ -31,3 +31,7 @@ async def init_db(engine: AsyncEngine) -> None:
             await conn.execute(text("PRAGMA foreign_keys=ON;"))
             await conn.execute(text("PRAGMA busy_timeout=5000;"))
         await conn.run_sync(Base.metadata.create_all)
+
+
+# Shared default engine and session maker singleton for the application
+default_engine, default_session_maker = create_engine_and_session()

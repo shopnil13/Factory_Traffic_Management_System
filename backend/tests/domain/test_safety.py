@@ -60,3 +60,32 @@ def test_safety_catches_desired_green_when_conflicting_actual_not_red():
     )
     with pytest.raises(SafetyViolation, match="Invariant 3 violated"):
         check_invariants(state, config)
+
+
+def test_safety_catches_conflicting_actual_green():
+    config = JunctionConfig(junction_id="J1", name="Junction 1")
+    state = JunctionState(
+        junction_id="J1",
+        stage=StageKind.ALL_RED,
+        desired_signals={d: Signal.RED for d in Direction},
+        actual_signals={
+            Direction.NORTH: Signal.GREEN,
+            Direction.EAST: Signal.GREEN,  # Conflicting actual GREEN across phases!
+            Direction.SOUTH: Signal.RED,
+            Direction.WEST: Signal.RED,
+        },
+    )
+    with pytest.raises(SafetyViolation, match="Conflicting physical GREEN"):
+        check_invariants(state, config)
+
+
+def test_safety_catches_negative_queue():
+    config = JunctionConfig(junction_id="J1", name="Junction 1")
+    state = JunctionState(
+        junction_id="J1",
+        desired_signals={d: Signal.RED for d in Direction},
+        actual_signals={d: Signal.RED for d in Direction},
+    )
+    state.get_queue_counts = lambda: {Direction.NORTH: -1, Direction.SOUTH: 0, Direction.EAST: 0, Direction.WEST: 0}
+    with pytest.raises(SafetyViolation, match="Queue invariant violated"):
+        check_invariants(state, config)

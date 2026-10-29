@@ -32,7 +32,8 @@ def register_emergency(
             existing.status = EmergencyStatus.ACTIVE
         return existing, effects
 
-    next_id = len(state.emergencies) + 1
+    existing_ids = [e.id for e in state.emergencies if e.id is not None]
+    next_id = (max(existing_ids) + 1) if existing_ids else 1
     record = EmergencyRecord(
         id=next_id,
         junction_id=state.junction_id,

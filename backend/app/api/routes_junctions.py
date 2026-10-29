@@ -11,13 +11,14 @@ from app.domain.inputs import AdminCommand
 from app.domain.model import Direction
 from app.infrastructure.controller.simulator import simulator_controller
 from app.infrastructure.db.repositories import JunctionRepository
-from app.infrastructure.db.session import create_engine_and_session
+from app.infrastructure.db.session import default_session_maker
 from app.infrastructure.sse import sse_broadcaster
 
 router = APIRouter(prefix="/api/junctions", tags=["Junctions"])
 
 # Dependency for repository
-_, session_maker = create_engine_and_session()
+# Shared session maker
+session_maker = default_session_maker
 default_repo = JunctionRepository(session_maker)
 
 

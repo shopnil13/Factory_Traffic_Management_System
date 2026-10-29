@@ -20,7 +20,7 @@ stateDiagram-v2
 ## 2. Operating Modes & Preemption Hierarchy
 
 Preemption priority:
-1. **DEGRADED**: Highest priority fail-safe. If controller fails or communication drops, all signals held physical RED.
+1. **DEGRADED**: Highest priority fail-safe. If controller fails, communication drops, or conflicting physical GREEN is observed, all signals are held physical RED.
 2. **EMERGENCY**: Preempts MANUAL and AUTOMATIC. Ignores `green_min_s`. Suspends active manual lease.
 3. **MANUAL**: Operator-controlled lease. Overrides AUTOMATIC.
 4. **AUTOMATIC**: Demand-driven scheduling based on queue length, vehicle weight, and starvation aging.
@@ -34,9 +34,9 @@ stateDiagram-v2
     MANUAL --> EMERGENCY: Vehicle Arrived (Manual Suspended)
     EMERGENCY --> MANUAL: Emergency Cleared (Lease Valid)
     EMERGENCY --> AUTOMATIC: Emergency Cleared (Lease Expired / None)
-    AUTOMATIC --> DEGRADED: Controller Offline / ACK Retries Exhausted
-    MANUAL --> DEGRADED: Controller Offline / ACK Retries Exhausted
-    EMERGENCY --> DEGRADED: Controller Offline / ACK Retries Exhausted
+    AUTOMATIC --> DEGRADED: Controller Offline / ACK Retries Exhausted / Conflicting Actual GREEN
+    MANUAL --> DEGRADED: Controller Offline / ACK Retries Exhausted / Conflicting Actual GREEN
+    EMERGENCY --> DEGRADED: Controller Offline / ACK Retries Exhausted / Conflicting Actual GREEN
     DEGRADED --> AUTOMATIC: Controller Online & Safe Re-sync Confirmed
 ```
 
@@ -53,5 +53,6 @@ stateDiagram-v2
 | `GREEN(p) (TIMING)` | `Tick` or `Event` | `YELLOW(p) (AWAITING_ACK)` | `should_leave(p)` is True | Scheduler, Emergency, or Manual switch |
 | `YELLOW(p) (AWAITING_ACK)` | `ControllerAck` | `YELLOW(p) (TIMING)` | All pending commands ACKed | Starts `yellow_s` timer |
 | `YELLOW(p) (TIMING)` | `Tick` | `ALL_RED (AWAITING_ACK)` | `elapsed >= yellow_s` | Emits commands for phase directions to RED |
+| `AWAITING_ACK` | `NACK / Mismatch` | `AWAITING_ACK (Retry)` | `attempts < ack_max_retries` | Resends same `command_id`; increments attempt |
 | (Any) | Retries Exhausted | `DEGRADED (ALL_RED)` | `attempts >= ack_max_retries` | All desired set to RED; actuals marked UNKNOWN |
-
+| (Any) | Conflicting Actual GREEN | `DEGRADED (ALL_RED)` | Conflicting directions report GREEN | Safety fail-safe; audit `SAFETY_VIOLATION_OBSERVED` |

@@ -18,14 +18,15 @@ from app.domain.config import JunctionConfig, TimingConfig
 from app.domain.inputs import ControllerAck
 from app.domain.model import Direction
 from app.infrastructure.controller.simulator import simulator_controller
-from app.infrastructure.db.session import create_engine_and_session, init_db
+from app.infrastructure.db.session import default_engine, default_session_maker, init_db
 from app.infrastructure.sse import sse_broadcaster
 from app.settings import TrafficProfile, settings
 
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-engine, session_maker = create_engine_and_session()
+engine = default_engine
+session_maker = default_session_maker
 
 
 async def dispatch_simulated_ack(ack: ControllerAck) -> None:

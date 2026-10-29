@@ -71,3 +71,24 @@ def check_invariants(state: JunctionState, config: JunctionConfig) -> None:
                     raise SafetyViolation(
                         f"ALL_RED invariant violated: direction {d.value} has desired signal {sig.value}, must be RED"
                     )
+
+    # Invariant 5: queue counts must be non-negative
+    for direction, count in state.get_queue_counts().items():
+        if count < 0:
+            raise SafetyViolation(
+                f"Queue invariant violated: direction {direction.value} has negative queue count {count}"
+            )
+
+    # Physical safety: no two directions in different phases are ever both actual GREEN
+    actual_green_dirs = [
+        d for d, s in state.actual_signals.items() if s == Signal.GREEN
+    ]
+    if actual_green_dirs:
+        actual_green_phases = {
+            config.phase_for_direction(d) for d in actual_green_dirs
+        }
+        actual_green_phases.discard(None)
+        if len(actual_green_phases) > 1:
+            raise SafetyViolation(
+                f"Conflicting physical GREEN invariant violated: conflicting phases have actual GREEN signals: {actual_green_phases}"
+            )

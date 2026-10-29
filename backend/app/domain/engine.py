@@ -70,6 +70,8 @@ class TrafficEngine:
         Pure function: reduces state and produces side effects.
         All safety invariants are verified prior to returning.
         """
+        import copy
+        backup = copy.deepcopy(state)
         effects: list[DomainEffect] = []
         outcome = "PROCESSED"
         details: dict[str, Any] = {}
@@ -116,6 +118,10 @@ class TrafficEngine:
                 state.pending_commands[c.command_id] = c
             effects.extend(cmd_effects)
             outcome = "SAFETY_VIOLATION_FAILSAFE"
+        except Exception:
+            # Atomic rollback: prevent partially corrupted state from surviving unhandled exception
+            state.__dict__.update(backup.__dict__)
+            raise
 
         # Increment state version on any state mutation
         state.version += 1
@@ -355,8 +361,14 @@ class TrafficEngine:
         cmd = state.pending_commands.get(ack.command_id)
 
         if not cmd:
-            # Late, duplicate, or unknown ACK
+            # Late, duplicate, or unknown ACK — still update physical actual signal
             state.actual_signals[ack.direction] = ack.reported_state
+
+            # Safety: even for orphan ACKs, check if the updated actuals reveal a
+            # conflicting physical GREEN across phases (e.g. faulty controller).
+            if self._check_actual_signals_for_conflict(state, config, now, effects):
+                return "ACTUAL_CONFLICT_DEGRADED"
+
             effects.append(
                 RecordAudit(
                     junction_id=state.junction_id,
@@ -375,6 +387,11 @@ class TrafficEngine:
         if ack.status in ("SUCCESS", "ACK") and ack.reported_state == cmd.requested_state:
             # Command successfully ACKed
             state.actual_signals[ack.direction] = ack.reported_state
+
+            # Safety: after updating actual signals, verify no conflicting physical GREENs
+            if self._check_actual_signals_for_conflict(state, config, now, effects):
+                return "ACTUAL_CONFLICT_DEGRADED"
+
             del state.pending_commands[ack.command_id]
 
             effects.append(
@@ -434,7 +451,9 @@ class TrafficEngine:
 
             return "ACKED"
         else:
-            # Mismatch or failure reported by controller
+            # Mismatch or failure reported by controller.
+            # Only enter DEGRADED once retries are exhausted.
+            new_attempts = cmd.attempts + 1
             effects.append(
                 RecordAudit(
                     junction_id=state.junction_id,
@@ -443,12 +462,52 @@ class TrafficEngine:
                     direction=ack.direction,
                     command_id=ack.command_id,
                     mode=state.mode.value,
-                    message=f"Controller reported mismatch/failure for {ack.command_id}: expected {cmd.requested_state.value}, got {ack.reported_state.value} ({ack.status})",
+                    message=(
+                        f"Controller reported mismatch/failure for {ack.command_id}: "
+                        f"expected {cmd.requested_state.value}, got {ack.reported_state.value} ({ack.status}). "
+                        f"Attempt {new_attempts}/{config.timing.ack_max_retries}"
+                    ),
                 )
             )
-            # Enter DEGRADED fail-safe state
-            self._enter_degraded_failsafe(state, config, now, effects, f"ACK mismatch/failure on {ack.command_id}")
-            return "NACK_OR_MISMATCH"
+
+            if cmd.attempts < config.timing.ack_max_retries:
+                # Retry: requeue the command with an incremented attempt counter
+                retried_cmd = PendingCommand(
+                    command_id=cmd.command_id,
+                    junction_id=cmd.junction_id,
+                    direction=cmd.direction,
+                    requested_state=cmd.requested_state,
+                    stage=cmd.stage,
+                    attempts=new_attempts,
+                    sent_at=now,
+                    status=CommandStatus.PENDING,
+                )
+                state.pending_commands[cmd.command_id] = retried_cmd
+                effects.append(
+                    SendControllerCommand(
+                        command_id=cmd.command_id,
+                        junction_id=cmd.junction_id,
+                        direction=cmd.direction,
+                        requested_state=cmd.requested_state,
+                        issued_at=now,
+                    )
+                )
+                effects.append(
+                    RecordAudit(
+                        junction_id=state.junction_id,
+                        server_ts=now,
+                        event_type="COMMAND_RETRY",
+                        direction=cmd.direction,
+                        command_id=cmd.command_id,
+                        mode=state.mode.value,
+                        message=f"Retrying command {cmd.command_id} after NACK (attempt {new_attempts}/{config.timing.ack_max_retries})",
+                    )
+                )
+                return "NACK_RETRY"
+            else:
+                # Retries exhausted → DEGRADED fail-safe
+                self._enter_degraded_failsafe(state, config, now, effects, f"ACK retries exhausted after NACK on {ack.command_id}")
+                return "NACK_DEGRADED"
 
     def _handle_tick(
         self,
@@ -751,3 +810,40 @@ class TrafficEngine:
         for c in cmds:
             state.pending_commands[c.command_id] = c
         effects.extend(cmd_effects)
+
+    def _check_actual_signals_for_conflict(
+        self,
+        state: JunctionState,
+        config: JunctionConfig,
+        now: datetime,
+        effects: list[DomainEffect],
+    ) -> bool:
+        """
+        Safety check per Plan Section 7.4:
+        If actual physical signals show conflicting GREEN across different phases,
+        immediately force DEGRADED fail-safe, issue all-RED commands, and audit SAFETY_VIOLATION_OBSERVED.
+        """
+        green_dirs = [d for d, sig in state.actual_signals.items() if sig == Signal.GREEN]
+        if len(green_dirs) > 1:
+            green_phases = {config.phase_for_direction(d) for d in green_dirs}
+            green_phases.discard(None)
+            if len(green_phases) > 1:
+                effects.append(
+                    RecordAudit(
+                        junction_id=state.junction_id,
+                        server_ts=now,
+                        event_type="SAFETY_VIOLATION_OBSERVED",
+                        mode=Mode.DEGRADED.value,
+                        message=f"Physical controller actual signals show conflicting GREEN across phases {sorted(green_phases)}. Forcing immediate DEGRADED fail-safe.",
+                        details={"actual_signals": {d.value: s.value for d, s in state.actual_signals.items()}},
+                    )
+                )
+                self._enter_degraded_failsafe(
+                    state,
+                    config,
+                    now,
+                    effects,
+                    f"Conflicting physical GREEN detected across phases: {sorted(green_phases)}",
+                )
+                return True
+        return False

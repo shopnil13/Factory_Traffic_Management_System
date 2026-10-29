@@ -355,7 +355,7 @@ class JunctionRepository:
                 # 5. Persist Emergencies
                 for em in state.emergencies:
                     if em.id:
-                        em_stmt = select(EmergencyModel).where(EmergencyModel.id == em.id)
+                        em_stmt = select(EmergencyModel).where(EmergencyModel.id == em.id, EmergencyModel.vehicle_id == em.vehicle_id)
                         em_res = await session.execute(em_stmt)
                         existing_em = em_res.scalar_one_or_none()
                         if existing_em:
