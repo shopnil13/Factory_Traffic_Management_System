@@ -21,11 +21,11 @@ def print_step(title: str):
 
 
 def print_success(msg: str):
-    print(f"\033[1;32m✔ {msg}\033[0m")
+    print(f"\033[1;32m[OK] {msg}\033[0m")
 
 
 def print_warn(msg: str):
-    print(f"\033[1;33m⚠ {msg}\033[0m")
+    print(f"\033[1;33m[WARN] {msg}\033[0m")
 
 
 def print_info(msg: str):
